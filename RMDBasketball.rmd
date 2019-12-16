@@ -1,10 +1,23 @@
+---
+title: "Basketball"
+author: "Nick Bruinsma"
+date: "12/15/2019"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
 
-###############################################################
-# Machine Leraning Capstone Project                           #
-# Predicting the number of points a player will get in a game #
-# 129921 Observations in data set from 2013-2018              #
-###############################################################
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+For the Capstone final project, I have elected to use a dataset of basketball game statistics. Each player is tracked for each game they have played from 2013 to 2018. Stats like points, steals, rebounds, etc are tracked for each game. The application for a machine learnign algorithm for something like this would be to predict player statistics in upcoming games in order to estimate potential daily fantasy sports points to create a team that is more likely to place in the money.We will focus on the points statistic, since it is the most important indicator of daily fantasy sports performance.
+We will start by revieiwing the data and doing some linear regression in order to better understand which factors are the most improtant to a predictive model
+
+First we load the data
+```{r Loading}
 ###Overview
 
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
@@ -12,23 +25,29 @@ if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.
 if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
 if(!require(knncat)) install.packages("knncat", repos = "http://cran.us.r-project.org")
 if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(rattle)) install.packages("rattle", repos = "http://cran.us.r-project.org")
+if(!require(RColorBrewer)) install.packages("RColorBrewer", repos = "http://cran.us.r-project.org")
+
 ## Importing packages
 library(data.table) # Import big files (CSV or Text) 
 library(readxl) # Import Excel files
 library(stringr)
 library(lubridate) 
 library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer) 
 
 #Import data of nba players for all games between 2013 and 2018 
 url <- 'https://github.com/NBruinsma/basketballML/raw/master/basic_per_game_player_stats_2013_2018.csv'
 dat <- read.csv(url)
 #dat <- read.csv('basic_per_game_player_stats_2013_2018.csv')
 
+```
 
 
-
-
-
+Clean the data for better use with machine learning algorithms
+```{r Cleaning}
 #clean the data
 
 #Rename the home/away column
@@ -58,6 +77,14 @@ dat <- dat %>% group_by(Player) %>% filter(n() >=10)
 
 dat <- dat %>% mutate(Gr22 = case_when(PTS < 22 ~ 'No', PTS >= 22 ~ 'Yes'))
 
+```
+## Analysis
+
+The plan is to split the data into test and train sets, and then we will conduct a linear regression. Once we have a better idea of the data, we will create a decision tree, to try to predict which players will get higher than 22 points (with nine players, that will give us 198 points total). 
+
+First we will split up the data into a test and training set. We have a large sample size, so we can create an effective training set with half of the rows
+
+```{r Split}
 #Split into test and training sets
 # test_set set will be 50% of dat data
 
@@ -86,8 +113,11 @@ test_set_full <- test_set
 #Remove points, 2 point attempts, 3 point attemts, 3 point attempts, percentages hit for each variable and field goal attempts and percentage
 test_set <- test_set %>% select(-PTS, -X2P, -X3P, -FT, -X2P., -X3P., -FT., -FG., -FGA, Gr22)
 
+```
 
-
+Next we will explore the data a bit, We will plot some different variables to see if there is a useful relationship between the variable and points to see if it can be used as a predictor 
+We wil check the points distribution and the relationship between points and playing at home or away, player, age, year of game, opponent, etc.
+```{r Explore}
 ### Analysis
 
 #Determine point distribution
@@ -129,6 +159,11 @@ train_set  %>% group_by(Year) %>% summarize(points = mean(PTS)) %>% ggplot(aes(Y
 train_set %>% group_by(Opp) %>% summarize(n = n(), avg = mean(PTS), se = sd(PTS)/sqrt(n()))  %>% mutate(Opp = reorder(Opp, avg)) %>% ggplot(aes(x = Opp, y = avg, ymin = avg - 2*se, ymax = avg + 2*se)) + geom_point() + geom_errorbar() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 
+```
+
+We will put together a baseline for out RMSE using just the average. 
+
+```{r Baseline}
 #Initialize RMSE function for comparing actual points scored to predicted rating
 RMSE <- function(actual_rating, predicted_rating){ sqrt(mean((actual_rating - predicted_rating)^2)) }
 RMSE_results <- tibble()
@@ -139,12 +174,14 @@ RMSE_base <- RMSE(train_set$PTS, mu)
 rmse_results <- data_frame(method = "Using mean only", RMSE = RMSE_base)
 options(pillar.sigfig = 9)
 
-
+rmse_results
 #With just the mu, we not that the RMSE is 7.9, which is a significant number of points off on average.
 
+```
 
-#Now we can make adjustments for year, age, position, home/away, opponent and player
+We will start using the different variables to see if we can reduce the RMSE, and figure out if they are useful predictors. We can start with players. This is likely to be the strongest indicator. Other games the player has played will strongly inform how well the player will perform in future games.
 
+```{r RMSE-Player}
 #Start with a prediction based on the player themselves
 player_ave <- train_set %>% 
   group_by(Player) %>% 
@@ -158,9 +195,16 @@ rmse_player <- RMSE(test_set_full$PTS,predicted_player_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Player History Model",  
                                      RMSE = rmse_player ))
-
+rmse_results
 #Drops the RMSE to 5.97 - which is a large improvement, but we can do better
 
+
+```
+Not surprisingly, Player is a strong predictor
+
+Next we will check how effective the home court advantage is
+
+```{r RMSE-home}
 #Add Home/Away Effect
 home_ave <- train_set %>% 
   group_by(Home) %>% 
@@ -175,6 +219,16 @@ rmse_home <- RMSE(test_set_full$PTS,predicted_home_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Add Home Model",  
                                      RMSE = rmse_home ))
+rmse_results
+
+```
+
+The player playing home or away makes a slight difference to projected points
+
+Next we can check to see how normalizing for the players position affects the algorithm
+
+```{r RMSE-Pos}
+
 
 #Add Position
 pos_ave <- train_set %>% 
@@ -191,9 +245,17 @@ rmse_pos <- RMSE(test_set_full$PTS,predicted_pos_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Add Position Model",  
                                      RMSE = rmse_pos ))
+
+rmse_results
 #Note that adding in the position average actually made the model worse - it could be because we are already
 #including position by virtue of including the player, and therefore double counting
 
+```
+We would expect the RMSE to decrease, because position has a correlation to points. But since we are already using the player, which will intrinsically include position - adding in position as well actually makes our model worse. Basically doubling up on position as a variable.
+
+Just to be sure we are using the best predictor, we can check what the model looks like with position instead of player
+
+```{r no-player}
 #Let's remove the player model and see if the position is a more accurate determinate
 predicted_pos_ave <- test_set %>% 
   left_join(home_ave, by='Home') %>%
@@ -204,9 +266,16 @@ rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Position without Player",  
                                      RMSE = rmse_pos ))
 
+rmse_results
 #Clearly using a players direct history is more useful than the position alone
 
+```
 
+That is a much worse RMSE value, so we know player is a better predictor and we can remove position from the model
+
+Next we can check age
+
+```{r RMSE-Age}
 age_ave <- train_set %>% 
   group_by(Age) %>% 
   summarize(b_a = mean(PTS - mu))
@@ -221,9 +290,16 @@ rmse_age <- RMSE(test_set_full$PTS,predicted_age_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Add Age Model (Position removed)",  
                                      RMSE = rmse_age ))
-#We see the same result with Age as with position. Clearly the "Player" factors are covered by using that player's history
-#Instead we will focus on the "game" factors.
 
+rmse_results
+#We see the same result with Age as with position. Clearly the "Player" factors are covered by using that player's history
+#Instead we will focus on the "game" factors. 
+```
+Age seems to be similar to position, in that it is already included by virtue of having Player in the model. We will change our focus to "Game" factors, since player factors are likely automatically included in Player
+
+We know that as years pass, there is a higher average points - so we can include year in the model as well.
+
+```{r RMSE-Year}
 year_ave <- train_set %>% 
   group_by(Year) %>% 
   summarize(b_y = mean(PTS - mu))
@@ -238,8 +314,14 @@ rmse_year <- RMSE(test_set_full$PTS,predicted_year_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Add Year Model (Age Removed)",  
                                      RMSE = rmse_year ))
+rmse_results
+```
+That has a slight effect as well, so we will include it in the model
+
+Finally we will check the opponent
 
 
+```{r RMSE-Opponent}
 #opponent included
 opp_ave <- train_set %>% 
   group_by(Opp) %>% 
@@ -256,18 +338,18 @@ rmse_opp <- RMSE(test_set_full$PTS,predicted_opp_ave$pred)
 rmse_results <- bind_rows(rmse_results,
                           data_frame(method="Add Opponent",  
                                      RMSE = rmse_opp ))
-
-
-
-
-
 rmse_results
+```
+Again there is a slight effect
 
-# Now we will conduct a decision tree analysis of the data to determine whether or not Players are likely to score more than 22
+```{r RMSE-Results}
+rmse_results %>% knitr::kable()
+```
 
+Now that we have learned from our liner regression, we can attempt to use the useful variables to create a decision tree that will help predict whether a player will reach a score of 22 points or more
+First we will create a dataset with just the useful factors to make it easier to manage. Then we will set the test and training sets again
 
-
-
+```{r Split-tree}
 #create a dataset that uses only the colums we found to be good predicters in the linear regression modelling
 Kdat <- dat %>% select(Player, Pos, Year, Opp, Home, Gr22)
 
@@ -296,8 +378,12 @@ test_set <- temp %>%
 removed <- anti_join(temp, test_set)
 train_set <- rbind(train_set, removed)
 
-rm( test_index, temp, removed)
+rm( test_index, temp, removed) 
+```
 
+Now we can create a decision tree using Player, Home/Away, Opponent and Year as variables for splitting nodes
+
+```{r Tree}
 #create a tree using Player, year, opponent and home variables (the ones linear regression showed us a relationship to pts with)
 
 mytree <- rpart(
@@ -308,19 +394,21 @@ control =rpart.control(minsplit =1,minbucket=1, cp=0.001)
 )
 
 #Explore the tree
-mytree
+mytree 
 
-
-if(!require(rattle)) install.packages("rattle", repos = "http://cran.us.r-project.org")
-if(!require(RColorBrewer)) install.packages("RColorBrewer", repos = "http://cran.us.r-project.org")
-
-library(rattle)
-library(rpart.plot)
-library(RColorBrewer)
-
-
+#This one becomes a bit of a mess, because there are so many players names to include in the tree. We could exlude the player data for the sake of getting a neater tree,
+#however it would be a shame to lose our best available predictor and the overall accuracy would decrease quite a bit
 fancyRpartPlot(mytree, caption = NULL)
+plot(mytree)
+```
+As we can see in the plotting, the visual of the tree is a bit messy, since there are player names inlcuded and we have 868 players which split into different groups but retain all of the names for future predictablility, so displaying the different splits makes a bit of a mess
 
+We need to install a couple more packages
+
+
+## Results
+
+```{r Results}
 #generate predictions for a test set
 pred <- predict(mytree, test_set, type = "class")
 
@@ -333,5 +421,12 @@ confusionMatrix(pred, test_set_full$Gr22)
 #check accuracy
 accuracy <- postResample(pred, test_set_full$Gr22)
 accuracy
+```
 
+Generating a confusion matrix shows us that the model predicts whether a player will score 22 or more points with 92% accuracy. This sounds pretty good, but a deeper look shows that we have a lot of players that score 22 or greater that we fail to predict. This is not a terrible result, because we don't need to predict all of the players correctly, but we do want to be sure that we are not predicting too many players to be greater than 22 and getting it wrong. After all, we only need to choose 9 players for a team.
+
+A more accurate model might take into account each of the different statistics that are tracked in daily fantasy sports, in order to get a more well rounded estimate. We might also do a formula where we divide projected points by the daily fantasy sports cost in order to get a points/dollar estimate of the players projected performance. That data is available from betting sites, but it is typically in the format of one nights games per excel sheet, so it would require more extensive scraping and stitching together of data to have a useful set for machine learning.
+
+## Conclusion
+With a data set of points per game from previous games played, we can make a prediciton of the points a player will get within approximately 6 points using linear regression. Using a decision tree we can attempt to determine which players will score above a threshold with an accuracy of approximately 92%. With additional factors for daily fantasy sports we might be able to get a more accurate prediction. If we could include injury data and team lineups, we could attempt to predict when an injury will lead to increased playing time for a player. That can often predict whether they score well above their daily fantasy sports score.
 
